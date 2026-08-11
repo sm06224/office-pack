@@ -11,6 +11,10 @@
 #    (ACAO を 1 つも返さず OPTIONS は 405。実測 2026-08-10)。
 #    だから「Pages に置く」= 同一 origin にする、が要る。
 #
+# 🔴 **配り先は origin の直下**(`https://<user>.github.io/office-pack/`)である。
+#    取る側は深さに依存しない絶対 path で書いてある ── 2026-08-11 に相対で書いて
+#    いたせいで、`/PKC3/dev/` から押したときだけ 1 段深い所を見て 404 を踏んだ。
+#
 # ## 何を 1 つ主張する job か
 #
 # **「PKC3 の release から一式を組み、Pages へ配った」** ── これだけ。
@@ -77,7 +81,7 @@ jobs:
       # 🔴 **配る前に検品する。** 「出力できた」は「動く」ではない ──
       #    2026-08-10 に `soffice.data.js.metadata` を入れ忘れ、builder は正常終了した
       #    のにブラウザで 404 → run dependency が解けず**永久に起動しない**壊れ方をした。
-      - name: 検品(揃っているか / 縮んでいないか)
+      - name: 検品(起動 file が揃っているか / 縮んでいないか)
         run: |
           set -euo pipefail
           fail=0
@@ -104,6 +108,58 @@ jobs:
           echo "フォント: $n 本"
           if [ "$n" -lt 1 ]; then echo "::error::日本語フォントが 1 本も入っていない"; fail=1; fi
           if [ "$fail" != 0 ]; then exit 1; fi
+
+      # 🔴 **目録と実物を突き合わせる**(2026-08-11 に足した)。
+      #
+      #    上の検品は起動 5 file しか見ておらず、**`pack.json` を 1 度も見ていなかった**。
+      #    ところが取りに来る側が**最初に読むのはこれ**で、無ければ 404 で導線ごと止まる
+      #    ── user には「取得元に一式がありません」としか見えない。
+      #
+      #    ⚠ 机上の穴ではない: run #3 に pack.json が入っていたのは、たまたま dispatch した
+      #    PKC3 の ref に組み立ての新版が在ったからで、main を指していれば
+      #    **目録の無い一式を配って green** だった。
+      #
+      #    🔑 「それらしいものが在るか」ではなく「**目録が指すものが実在するか**」で書く
+      #    ── 前者は代替物に救われる(CLAUDE.md「空振りを直したら今度は何に救われて
+      #    いないかを問う」)。⚠ **1 step = 1 主張**にするため上の検品とは分けてある。
+      - name: 検品(目録と実物が突き合うか)
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/check-manifest.mjs" <<'MJS'
+          import { existsSync, readFileSync, statSync } from 'node:fs';
+          import { join } from 'node:path';
+
+          const OUT = '_site';
+          const path = join(OUT, 'pack.json');
+          if (!existsSync(path)) {
+            console.log('::error::_site/pack.json が無い ── 取る側はこれを最初に読む');
+            process.exit(1);
+          }
+          let m;
+          try {
+            m = JSON.parse(readFileSync(path, 'utf-8'));
+          } catch (e) {
+            console.log(`::error::_site/pack.json が JSON として読めない: ${e.message}`);
+            process.exit(1);
+          }
+          let fail = 0;
+          const say = (s) => { console.log(`::error::${s}`); fail = 1; };
+
+          const files = Array.isArray(m.files) ? m.files : [];
+          const fonts = Array.isArray(m.fonts) ? m.fonts : [];
+          if (files.length === 0) say('pack.json の files が空 ── 取る側は「配布元が違う」と言って撥ねる');
+          // 🔴 0 本の目録は取る側が撥ねる(日本語が豆腐になるため)
+          if (fonts.length === 0) say('pack.json の fonts が 0 本');
+
+          for (const name of [...files, ...fonts]) {
+            const f = join(OUT, name);
+            if (!existsSync(f)) say(`目録が指す ${name} が _site に無い`);
+            else if (statSync(f).size === 0) say(`目録が指す ${name} が 0 バイト`);
+          }
+          console.log(`目録: ${m.version} / files ${files.length} 件 / fonts ${fonts.length} 本`);
+          process.exit(fail);
+          MJS
+          node "$RUNNER_TEMP/check-manifest.mjs"
 
       - uses: actions/configure-pages@v6
         with:
