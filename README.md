@@ -33,6 +33,21 @@ release download は `Access-Control-Allow-Origin` を 1 つも返さず、`OPTI
 
 `.gz` は **JS 側が `DecompressionStream` で解く**ので、素のバイト列として配られます。
 
+## 🔴 初回だけ、手で 1 つ入れる設定がある
+
+**Settings → Pages → Build and deployment → Source を「GitHub Actions」にする。**
+
+⚠ workflow の `actions/configure-pages` には `enablement: true` を付けてあるが、
+**それでは足りない**(2026-08-11 に実測):
+
+```
+Get Pages site failed.    Error: Not Found
+Create Pages site failed. Error: Resource not accessible by integration
+```
+
+Pages サイトの**新規作成**は `GITHUB_TOKEN` の権限の外にある。
+一度でも Pages が有効になっていれば、以後 `configure-pages` は読むだけなので通る。
+
 ## 更新のしかた
 
 1. PKC3 の `office-wasm-build` workflow で LibreOffice を焼く(prerelease `lo-wasm-dev` が出る)
