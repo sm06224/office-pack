@@ -1,0 +1,109 @@
+# Office wasm 一式(LibreOffice / Qt6)を GitHub Pages で配る。
+#
+# 🔴 user 裁定 2026-08-11: 配り先は**この別 repo**。理由は 3 つ:
+#   - GitHub Pages は**同一ユーザーの全 repo が `https://<user>.github.io` という
+#     同じ origin** に載る。したがって PKC3 本体(`/PKC3/`)から
+#     `/office-pack/` を fetch しても **CORS は起きない**
+#   - 更新周期が違う(LibreOffice は年数回 / PKC3 本体は毎日)
+#   - 本体の deploy 時間にも `check-dist` の検品にも**一切影響しない**
+#
+# 🚫 GitHub Release 資産を JS から直接 fetch する道は**塞がっている**
+#    (ACAO を 1 つも返さず OPTIONS は 405。実測 2026-08-10)。
+#    だから「Pages に置く」= 同一 origin にする、が要る。
+#
+# ## 何を 1 つ主張する job か
+#
+# **「PKC3 の release から一式を組み、Pages へ配った」** ── これだけ。
+# ⚠ 起動 probe は**ここに置かない**(user 指示「遅いランナーでやる意味がわからない」)。
+# 動作確認は PKC3 側で手元のブラウザを使う(`fetch-and-run.sh --serve`)。
+name: pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      pkc3_ref:
+        description: 組み立て script を取る PKC3 の ref
+        default: main
+      lo_tag:
+        description: 一式を取る PKC3 の release tag
+        default: lo-wasm-dev
+  # PKC3 側が新しい一式を焼いたら叩ける口(将来用。secret は要らない側に寄せてある)
+  repository_dispatch:
+    types: [office-pack-updated]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# ⚠ 同時に 2 つ走らせない(Pages の deploy は 1 本しか通らない)
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 🔑 **組み立ての正本は PKC3 に 1 つだけ**置く。ここへ書き写さない ──
+      #    「一式とは何か」が 2 か所にあると、片方だけ直って壊れる(実際に踏んだ)
+      - name: PKC3 の組み立て script を取る
+        uses: actions/checkout@v4
+        with:
+          repository: sm06224/PKC3
+          ref: ${{ github.event.inputs.pkc3_ref || 'main' }}
+          path: pkc3
+          # ⚠ PKC3 は public なので token は要らない
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 一式を取る(release の zip + BIZ UD フォント)
+        env:
+          PKC3_LO_TAG: ${{ github.event.inputs.lo_tag || 'lo-wasm-dev' }}
+          PKC3_LO_DIR: ${{ runner.temp }}/lo-wasm
+        run: bash pkc3/build/office-wasm/fetch-and-run.sh --fetch-only
+
+      - name: 配信一式を組む(gz 化 + フォント + index)
+        run: node pkc3/build/office-wasm/make-pages-bundle.mjs "${{ runner.temp }}/lo-wasm" _site
+
+      # 🔴 **配る前に検品する。** 「出力できた」は「動く」ではない ──
+      #    2026-08-10 に `soffice.data.js.metadata` を入れ忘れ、builder は正常終了した
+      #    のにブラウザで 404 → run dependency が解けず**永久に起動しない**壊れ方をした。
+      - name: 検品(揃っているか / 縮んでいないか)
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in soffice.js qtloader.js soffice.data.js.metadata soffice.wasm.gz soffice.data.gz .nojekyll; do
+            if [ ! -s "_site/$f" ]; then echo "::error::_site/$f が無い(または空)"; fail=1; fi
+          done
+          # ⚠ **下限も置く**(CLAUDE.md: tripwire は上限だけでなく下限も)。
+          #    取り違え・欠落は**縮む方向**にも起きる ── 0 バイトの成果物を
+          #    「軽くなった」と言って配らないため。
+          wasm=$(stat -c%s _site/soffice.wasm.gz)
+          data=$(stat -c%s _site/soffice.data.gz)
+          echo "soffice.wasm.gz=$((wasm/1048576))MB  soffice.data.gz=$((data/1048576))MB"
+          if [ "$wasm" -lt 30000000 ]; then echo "::error::soffice.wasm.gz が小さすぎる"; fail=1; fi
+          if [ "$data" -lt 15000000 ]; then echo "::error::soffice.data.gz が小さすぎる"; fail=1; fi
+          # 🔴 **CJK フォントが 1 本も無い一式を配らない**(user 指示「日本語は絶対」)。
+          #    ⚠ 豆腐は例外を出さずに描かれるので、機械で止めるしかない
+          n=$(find _site/fonts -name '*.ttf' 2>/dev/null | wc -l)
+          echo "フォント: $n 本"
+          if [ "$n" -lt 1 ]; then echo "::error::日本語フォントが 1 本も入っていない"; fail=1; fi
+          if [ "$fail" != 0 ]; then exit 1; fi
+
+      - uses: actions/configure-pages@v6
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5
