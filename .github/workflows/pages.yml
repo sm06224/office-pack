@@ -81,9 +81,15 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          for f in soffice.js qtloader.js soffice.data.js.metadata soffice.wasm.gz soffice.data.gz .nojekyll; do
+          # 🔴 **中身のある file は `-s`(空を許さない)、マーカーは `-f`(在るだけでよい)。**
+          #    ⚠ 初回の run はここで落ちた ── `.nojekyll` を `-s` の輪に入れていたが、
+          #    あれは **空であるのが正しい**マーカーである。組み立ては成功していたのに
+          #    「無い(または空)」と言って deploy を止めた = **検査の主張そのものが
+          #    間違っていた**(CLAUDE.md 2026-08-08 と同じ型)。
+          for f in soffice.js qtloader.js soffice.data.js.metadata soffice.wasm.gz soffice.data.gz; do
             if [ ! -s "_site/$f" ]; then echo "::error::_site/$f が無い(または空)"; fail=1; fi
           done
+          if [ ! -f _site/.nojekyll ]; then echo "::error::_site/.nojekyll が無い"; fail=1; fi
           # ⚠ **下限も置く**(CLAUDE.md: tripwire は上限だけでなく下限も)。
           #    取り違え・欠落は**縮む方向**にも起きる ── 0 バイトの成果物を
           #    「軽くなった」と言って配らないため。
