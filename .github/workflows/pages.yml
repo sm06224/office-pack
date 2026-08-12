@@ -71,7 +71,13 @@ jobs:
           PKC3_LO_DIR: ${{ runner.temp }}/lo-wasm
         run: bash pkc3/build/office-wasm/fetch-and-run.sh --fetch-only
 
+      # ⚠ **env は step ごと**(PKC3 の CLAUDE.md「step ごとに別シェル」)。
+      #    ここへ渡し忘れていたので `pack.json` の版が**常に `unknown`** だった(#125)。
+      #    🔑 いまは一式に同梱された `build-info.json` を優先して読むので、これは
+      #    **それが無い古い一式のための保険**である。
       - name: 配信一式を組む(gz 化 + フォント + index)
+        env:
+          PKC3_LO_TAG: ${{ github.event.inputs.lo_tag || 'lo-wasm-dev' }}
         run: node pkc3/build/office-wasm/make-pages-bundle.mjs "${{ runner.temp }}/lo-wasm" _site
 
       # 🔴 **配る前に検品する。** 「出力できた」は「動く」ではない ──
